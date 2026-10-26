@@ -1,0 +1,26 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+venv/
+env/
+ENV/
+.venv/
+
+# PyTorch / Training checkpoints
+results/
+training_checkpoints/
+*.pt
+*.bin
+*.safetensors
+
+# OS / IDE artifacts
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Streamlit logs
+.streamlit/
