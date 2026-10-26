@@ -12,6 +12,8 @@ from model_utils import (
     predict_offline_heuristic,
     TransformerNewsClassifier
 )
+import fact_checker
+from fact_checker import check_factual_veracity
 
 # -----------------------------------------------------------------------------
 # Page Configuration
@@ -216,20 +218,30 @@ with col_actions[1]:
 if analyze_btn:
     if not user_text.strip():
         st.warning("Please paste or type some news text first.")
-    elif word_cnt < 4:
-        st.warning("Text is too short. Please enter at least 4–5 words for accurate analysis.")
+    elif word_cnt < 3:
+        st.warning("Text is too short. Please enter a complete headline or claim to analyze.")
     else:
-        with st.spinner("Analyzing text patterns and linguistic signals..."):
+        with st.spinner("Analyzing text patterns and verifying facts..."):
             time.sleep(0.15)  # smooth visual feedback
             
-            clf = load_classifier()
-            if clf is not None:
-                try:
-                    verdict, confidence, probs = clf.predict(user_text)
-                except Exception:
-                    verdict, confidence, probs = predict_offline_heuristic(user_text)
+            # 1. Fact-check verifiable semantic contradictions & hoaxes
+            factual_check = check_factual_veracity(user_text)
+            if factual_check:
+                is_false, explanation = factual_check
+                verdict = "FAKE"
+                confidence = 0.99
+                probs = {"FAKE": 0.99, "REAL": 0.01}
+                fact_check_reason = explanation
             else:
-                verdict, confidence, probs = predict_offline_heuristic(user_text)
+                fact_check_reason = None
+                clf = load_classifier()
+                if clf is not None:
+                    try:
+                        verdict, confidence, probs = clf.predict(user_text)
+                    except Exception:
+                        verdict, confidence, probs = predict_offline_heuristic(user_text)
+                else:
+                    verdict, confidence, probs = predict_offline_heuristic(user_text)
 
             signals = analyze_linguistic_signals(user_text)
             prob_fake = probs.get("FAKE", 0.0)
@@ -249,15 +261,23 @@ if analyze_btn:
             </div>
             """, unsafe_allow_html=True)
         else:
+            reason_html = ""
+            if fact_check_reason:
+                reason_html = f"""
+                <div style="margin-top: 0.8rem; padding: 0.7rem 1rem; background: #FFF1F2; border-radius: 8px; border: 1px solid #FECDD3; color: #9F1239; font-size: 0.95rem; text-align: left;">
+                    <b>💡 Fact-Check Detection:</b> {fact_check_reason}
+                </div>
+                """
             st.markdown(f"""
             <div class="card-fake">
-                <div class="verdict-title" style="color: #B91C1C;">🚨 Potential Fake News</div>
+                <div class="verdict-title" style="color: #B91C1C;">🚨 Potential Fake News / False Claim</div>
                 <div class="verdict-desc">
-                    This text exhibits strong sensationalism, clickbait phrasing, or unverified claims.
+                    This claim contains verifiable factual contradictions, sensationalism, or clickbait framing.
                 </div>
                 <div class="confidence-badge" style="color: #B91C1C; border: 1px solid #FCA5A5;">
                     Confidence: <b>{confidence * 100:.1f}%</b>
                 </div>
+                {reason_html}
             </div>
             """, unsafe_allow_html=True)
 
