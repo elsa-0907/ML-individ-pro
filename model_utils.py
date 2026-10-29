@@ -118,18 +118,39 @@ BENCHMARK_METRICS = {
 
 # Pre-compiled regex patterns for linguistic / style analysis
 CLICKBAIT_KEYWORDS = [
+    # Classic Clickbait / Sensationalism
     r"\bbreaking\b", r"\bshocking\b", r"\bbombshell\b", r"\bsecret\b", r"\bproven?\b",
     r"\bconspiracy\b", r"\bexposed\b", r"\bhoax\b", r"\bthey don'?t want you to know\b",
     r"\bmainstream media\b", r"\bwake up\b", r"\bshare before (it'?s|they) delete\b",
     r"\byou won'?t believe\b", r"\bmiracle\b", r"\bbig pharma\b", r"\belites?\b",
-    r"\bunbelievable\b", r"\bcover[\s-]?up\b", r"\bcensored\b", r"\bgovernment hides\b"
+    r"\bunbelievable\b", r"\bcover[\s-]?up\b", r"\bcensored\b", r"\bgovernment hides\b",
+
+    # Unverified Death, Assassination, Arrest Rumors of Public Figures
+    r"\b(died\s+yesterday|passed\s+away\s+yesterday|assassinated|executed)\b",
+    r"\b(arrested\s+yesterday|secretly\s+arrested|arrested\s+in\s+secret)\b",
+    r"\b(military\s+tribunal|guantanamo|executed\s+for\s+treason)\b",
+
+    # Miracle Health Cures & Medical Disinformation
+    r"\bcures?\s+(all\s+types\s+of\s+)?(cancer|diabetes|hiv|aids|covid|coronavirus|tumors?)\b",
+    r"\b(drinking|eating|cure)\s+.*cures?\b",
+    r"\b(miracle\s+cure|cure\s+in\s+\d+\s+hours?|cure\s+overnight|eradicate\s+disease)\b",
+    r"\b(natural\s+remedy\s+eliminates|doctors?\s+hate\s+this|banned\s+cure)\b",
+    r"\b(vaccines?\s+.*(alter\s+.*dna|microchips?|5g|tracking|poison))\b",
+
+    # Catastrophic & Apocalyptic Rumors
+    r"\b(asteroid\s+will\s+destroy|world\s+ending\s+next|nuclear\s+missile\s+on|nuclear\s+strike\s+on)\b",
+    r"\b(alien\s+spaceship|ufo\s+spotted\s+in|aliens?\s+discovered)\b",
+
+    # Conspiracies & Cabal Rumors
+    r"\b(deep\s+state|illuminati|new\s+world\s+order|child\s+trafficking\s+ring)\b"
 ]
 
 CREDIBILITY_KEYWORDS = [
     r"\bspokes(wo)?man\b", r"\bofficials?\b", r"\bstatement\b", r"\baccording to\b",
     r"\bresearchers?\b", r"\bpublished in\b", r"\bministry\b", r"\bdepartment\b",
     r"\bagency\b", r"\bconference\b", r"\bconfirmed\b", r"\bspokesperson\b",
-    r"\binvestigation\b", r"\bspokesperson\b", r"\bstatistical\b", r"\bcommittee\b"
+    r"\binvestigation\b", r"\bstatistical\b", r"\bcommittee\b", r"\bfederal reserve\b",
+    r"\bannounced on\b", r"\breported on\b", r"\bpolicy meeting\b", r"\bpeer[\s-]reviewed\b"
 ]
 
 
@@ -197,12 +218,25 @@ def analyze_linguistic_signals(raw_text: str) -> Dict[str, Any]:
             detected_credible.append(clean_term)
 
     # Heuristic sensationalism score (0.0 to 100.0)
-    clickbait_weight = min(len(detected_clickbait) * 22.0, 60.0)
-    caps_weight = min(uppercase_ratio * 100.0 * 0.8, 30.0)
-    punct_weight = min((exclamations * 10.0) + (questions * 5.0), 25.0)
-    credible_discount = min(len(detected_credible) * 20.0, 50.0)
+    # When clickbait or extreme unverified triggers are present, immediately score >= 75%
+    if detected_clickbait:
+        clickbait_weight = 50.0 + min(len(detected_clickbait) * 15.0, 35.0)
+    else:
+        clickbait_weight = 0.0
 
-    score = 25.0 + clickbait_weight + caps_weight + punct_weight - credible_discount
+    caps_weight = min(uppercase_ratio * 100.0 * 0.8, 30.0)
+    punct_weight = min((exclamations * 12.0) + (questions * 6.0), 25.0)
+    credible_discount = min(len(detected_credible) * 25.0, 60.0)
+
+    # Base score: if no sourcing or clickbait, neutral 45%; if credible, lower; if clickbait, high
+    if detected_clickbait or uppercase_ratio > 0.25 or exclamations > 0:
+        score = 20.0 + clickbait_weight + caps_weight + punct_weight - (credible_discount * 0.5)
+    elif detected_credible:
+        score = max(5.0, 25.0 - credible_discount)
+    else:
+        # Short unsourced claims default to cautious probability
+        score = 45.0
+
     sensationalism_score = max(2.0, min(98.0, score))
 
     return {
@@ -269,18 +303,24 @@ class TransformerNewsClassifier:
             # Inspect model config for label mapping
             if hasattr(self.model.config, "id2label") and self.model.config.id2label:
                 id2label = self.model.config.id2label
-                # Normalize label strings to uppercase 'FAKE' / 'REAL'
+                # Normalize label strings: 0 -> REAL, 1 -> FAKE (standard for dhruvpal/fake-news-bert)
                 norm_mapping = {}
                 for k, v in id2label.items():
                     k_int = int(k)
                     v_str = str(v).upper()
-                    if "FAKE" in v_str or "0" in v_str or "MISINFO" in v_str:
+                    if "FAKE" in v_str or "MISINFO" in v_str:
                         norm_mapping[k_int] = "FAKE"
-                    elif "REAL" in v_str or "1" in v_str or "TRUE" in v_str:
+                    elif "REAL" in v_str or "TRUE" in v_str:
                         norm_mapping[k_int] = "REAL"
+                    elif v_str in ["LABEL_0", "0"]:
+                        norm_mapping[k_int] = "REAL"
+                    elif v_str in ["LABEL_1", "1"]:
+                        norm_mapping[k_int] = "FAKE"
                     else:
                         norm_mapping[k_int] = v_str
                 self.label_mapping = norm_mapping
+            else:
+                self.label_mapping = {0: "REAL", 1: "FAKE"}
 
             self.is_loaded = True
             self.load_error = None
